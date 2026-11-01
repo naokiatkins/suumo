@@ -221,6 +221,8 @@ FILTERS = {"chintai": {
     "min_area": ("mb", RENT_AREA), "max_area": ("mt", RENT_AREA),
     "max_walk": ("et", ["1", "5", "7", "10", "15", "20"]),
     "max_age": ("cn", ["0", "1", "3", "5", "7", "10", "15", "20", "25", "30"]),
+    "south_facing": ("tc", "0400104"),  # 南向き: includes south-east and south-west
+    "reinforced_concrete": ("kz", "1"),  # 鉄筋系: RC and SRC
 }}
 HOUSE_FILTERS = {
     "min_price": ("kb", HOUSE_PRICE), "max_price": ("kt", HOUSE_PRICE + ["12000"]),
@@ -228,6 +230,7 @@ HOUSE_FILTERS = {
     "min_land_area": ("tb", HOUSE_AREA), "max_land_area": ("tt", HOUSE_AREA),
     "max_walk": ("et", ["1", "3", "5", "7", "10", "15", "20"]),
     "max_age": ("cn", ["3", "5", "7", "10", "15", "20", "25", "30"]),  # chukoikkodate only
+    "south_facing": ("mh", "151"),  # 南向き feature tag set by the agency, not a direction field
 }
 
 
@@ -239,6 +242,12 @@ def suumo_params(kind, filters):
         if name not in spec:
             raise ValueError(f"{kind}: unknown filter {name!r}, use one of {', '.join(spec)}")
         param, allowed = spec[name]
+        if isinstance(allowed, str):  # on/off option, e.g. south_facing: true
+            if not isinstance(value, bool):
+                raise ValueError(f"{kind}: {name} must be true or false, got {value!r}")
+            if value:
+                params[param] = allowed
+            continue
         value = f"{float(value):.1f}" if allowed is RENT_MAN else str(value)  # SUUMO wants rent as 25.0
         if value not in allowed:
             raise ValueError(f"{kind}: {name}={value} isn't a SUUMO option, use one of {', '.join(allowed)}")

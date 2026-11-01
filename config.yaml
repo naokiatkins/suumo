@@ -8,34 +8,40 @@
 pages: 3  # per search, newest first; about 20 buildings or houses per page
 
 searches:
+
   chintai:  # rent
-    wards: [setagaya, shibuya]
+    wards: [setagaya, shibuya, koto, edogawa, kita, suginami]
     filters:
       # min_rent: 10    # 万円: 3.0 to 20.0 in steps of 0.5, then 21-30, 35, 40, 50, 100
-      max_rent: 15    # 万円: same values as min_rent
-      min_area: 50    # m2: 20 to 70 in steps of 5, then 80, 90, 100
+      max_rent: 16    # 万円: same values as min_rent
+      min_area: 40    # m2: 20 to 70 in steps of 5, then 80, 90, 100
       # max_area: 80    # m2: same values as min_area
-      max_walk: 10    # minutes to station: 1, 5, 7, 10, 15, 20
+      max_walk: 15    # minutes to station: 1, 5, 7, 10, 15, 20
       # max_age: 20     # years: 0 (new), 1, 3, 5, 7, 10, 15, 20, 25, 30
+      south_facing: true  # south, south-east or south-west
+      reinforced_concrete: true  # 鉄筋系: RC and SRC buildings
 
   ikkodate:  # new houses for sale
     wards: [setagaya, shibuya]
     filters:
       min_price: 4000           # 万円: 500 to 8000 in steps of 500, then 9000, 10000
       max_price: 8000          # 万円: 500 to 8000 in steps of 500, then 9000, 10000, 12000
-      min_building_area: 60     # m2: 60 to 150 in steps of 10
+      # min_building_area: 50     # m2: 60 to 150 in steps of 10
       # max_building_area: 150    # m2: same values as min_building_area
       # min_land_area: 60         # m2: 60 to 150 in steps of 10
       # max_land_area: 150        # m2: same values as min_land_area
       max_walk: 15              # minutes to station: 1, 3, 5, 7, 10, 15, 20
+      south_facing: true        # listings the agency tagged 南向き (south-facing)
 
   chukoikkodate:  # used houses for sale
     wards: [setagaya, shibuya]
     filters:
       min_price: 4000           # 万円: 500 to 8000 in steps of 500, then 9000, 10000
       max_price: 8000          # 万円: 500 to 8000 in steps of 500, then 9000, 10000, 12000
-      min_building_area: 60     # m2: 60 to 150 in steps of 10
+      # min_building_area: 60     # m2: 60 to 150 in steps of 10
       # max_building_area: 150    # m2: same values as min_building_area
       # min_land_area: 60         # m2: 60 to 150 in steps of 10
       # max_land_area: 150        # m2: same values as min_land_area
       max_walk: 15              # minutes to station: 1, 3, 5, 7, 10, 15, 20
+      south_facing: true        # listings the agency tagged 南向き (south-facing)
+      # SUUMO has no building structure filter for houses

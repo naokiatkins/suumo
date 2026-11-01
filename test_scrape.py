@@ -17,6 +17,12 @@ def rejects(kind, filters):
 
 assert suumo_params("chintai", {"max_rent": 25, "min_rent": 7.5, "min_area": 40}) == {"ct": "25.0", "cb": "7.5", "mb": "40"}
 assert suumo_params("chukoikkodate", {"max_price": 12000, "min_land_area": 60, "max_age": 20}) == {"kt": "12000", "tb": "60", "cn": "20"}
+assert suumo_params("chintai", {"south_facing": True}) == {"tc": "0400104"}
+assert suumo_params("chintai", {"reinforced_concrete": True}) == {"kz": "1"}
+assert rejects("ikkodate", {"reinforced_concrete": True})  # SUUMO has no structure filter for houses
+assert suumo_params("ikkodate", {"south_facing": True}) == {"mh": "151"}
+assert suumo_params("ikkodate", {"south_facing": False}) == {}
+assert rejects("chintai", {"south_facing": "yes"})
 assert rejects("chintai", {"max_rent": 23.7})  # SUUMO would silently return nothing
 assert rejects("chintai", {"max_walk": 3})  # 3 minutes exists for houses, not rent
 assert rejects("ikkodate", {"min_price": 12000})  # 12000 is a max-only option
