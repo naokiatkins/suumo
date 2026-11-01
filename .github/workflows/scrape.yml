@@ -17,6 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements.txt
+      - run: python test_scrape.py
       - run: python scrape.py
       - name: Commit data
         if: ${{ !cancelled() }} # keep partial data if one target fails
