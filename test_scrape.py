@@ -3,7 +3,25 @@ import datetime
 import os
 import tempfile
 
-from scrape import add_history, area_span, calc_rent, nearest_station, price_span, rooms_span, yen
+from scrape import (add_history, area_span, calc_rent, load_config, nearest_station, price_span,
+                    rooms_span, suumo_params, yen)
+
+
+def rejects(kind, filters):
+    try:
+        suumo_params(kind, filters)
+    except ValueError:
+        return True
+    return False
+
+
+assert suumo_params("chintai", {"max_rent": 25, "min_rent": 7.5, "min_area": 40}) == {"ct": "25.0", "cb": "7.5", "mb": "40"}
+assert suumo_params("chukoikkodate", {"max_price": 12000, "min_land_area": 60, "max_age": 20}) == {"kt": "12000", "tb": "60", "cn": "20"}
+assert rejects("chintai", {"max_rent": 23.7})  # SUUMO would silently return nothing
+assert rejects("chintai", {"max_walk": 3})  # 3 minutes exists for houses, not rent
+assert rejects("ikkodate", {"min_price": 12000})  # 12000 is a max-only option
+assert rejects("chintai", {"max_price": 25})  # rent uses max_rent
+load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"))  # the real config is valid
 
 assert yen("33.5万円") == 335000
 assert yen("15000円") == 15000
@@ -54,5 +72,10 @@ with tempfile.TemporaryDirectory() as folder:
     add_history(rows, folder, today, "_monthly_yen")
     assert (rows[0]["_first_seen"], rows[0]["_price_change"]) == (None, 10000)
     assert (rows[1]["_first_seen"], rows[1]["_days_listed"], rows[1]["_price_change"]) == ("2026-11-03", 0, None)
+    with open(os.path.join(folder, "2026-11-02.csv"), "w", encoding="utf-8") as f:
+        f.write("id,_monthly_yen,_first_seen\n")  # a day where the filters matched nothing
+    rows = [{"id": "1", **rent, **c}]
+    add_history(rows, folder, today, "_monthly_yen")
+    assert rows[0]["_first_seen"] == "2026-11-03"
 
 print("ok")

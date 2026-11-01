@@ -1,4 +1,4 @@
-"""Scrape SUUMO listings into data/<type>/<ward>/YYYY-MM-DD.csv."""
+"""Scrape the SUUMO searches in config.yaml into data/<type>/<ward>/YYYY-MM-DD.csv."""
 import csv
 import datetime
 import os
@@ -7,10 +7,10 @@ import sys
 import time
 
 import requests
+import yaml
 from bs4 import BeautifulSoup
 
 BASE = "https://suumo.jp"
-PAGES = 3  # shortcut: first few pages per search only, raise if we need full coverage
 HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"}
 
 RENT_FIELDS = ["id", "name", "address", "access", "age_floors", "floor", "rent", "admin_fee",
@@ -186,13 +186,14 @@ def add_history(rows, folder, today, price_key):
     if not earlier:
         return
     with open(os.path.join(folder, earlier[-1]), encoding="utf-8") as f:
-        prev = {r["id"]: r for r in csv.DictReader(f)}
-    if not any("_first_seen" in r for r in prev.values()):
+        reader = csv.DictReader(f)
+        prev = {r["id"]: r for r in reader}
+    if "_first_seen" not in (reader.fieldnames or []):  # checks the header, so an empty CSV still counts
         return
     for row in rows:
         p = prev.get(row["id"])
         # shortcut: only compares with the latest earlier file, so a listing missing for a night
-        # (or pushed past PAGES) comes back as new; compare against all files if that gets noisy
+        # (or pushed past the scraped pages) comes back as new; compare against all files if that gets noisy
         first = (p.get("_first_seen") or None) if p else today.isoformat()
         old_price = int(p[price_key]) if p and p[price_key] else None
         row["_first_seen"] = first
@@ -200,44 +201,90 @@ def add_history(rows, folder, today, price_key):
         row["_price_change"] = row[price_key] - old_price if old_price and row[price_key] else None
 
 
-# (SUUMO type, ward): searched at /<type>/tokyo/sc_<ward>/, saved to data/<type>/<ward>/
-TARGETS = [
-    ("chintai", "setagaya"),
-    ("ikkodate", "setagaya"),       # new houses for sale
-    ("chukoikkodate", "setagaya"),  # used houses for sale
-    ("chintai", "shibuya"),
-    ("ikkodate", "shibuya"),
-    ("chukoikkodate", "shibuya"),
-]
-# shortcut: assumes every for-sale type uses the house page layout, add a parser when adding mansion types
+TYPES = ("chintai", "ikkodate", "chukoikkodate")  # add a parser before adding e.g. mansion
+NO_MATCH = "条件にあう物件がありません"  # SUUMO's "no listings match" message
 # type -> (parser, scraped columns, calculated columns, calculator, column used for _price_change)
 PARSERS = {"chintai": (parse_rent, RENT_FIELDS, RENT_CALC, calc_rent, "_monthly_yen")}
 HOUSE = (parse_house, HOUSE_FIELDS, HOUSE_CALC, calc_house, "_price_yen_min")
-# Newest first, so the first PAGES hold the latest listings and _first_seen isn't fooled by
+# Newest first, so the scraped pages hold the latest listings and _first_seen isn't fooled by
 # SUUMO's default "recommended" order shuffling listings in and out of those pages.
 SORT = {"chintai": {"po1": "09", "po2": "99"}}  # 新着順
 HOUSE_SORT = {"po": "1", "pj": "2"}  # 新着・更新順: updated old listings also rise, so a few false "new"
 
+# config.yaml filter name -> (SUUMO query param, values SUUMO's dropdowns accept)
+RENT_MAN = [f"{x / 2:.1f}" for x in range(6, 40)] + [f"{x:.1f}" for x in [*range(20, 31), 35, 40, 50, 100]]
+RENT_AREA = [str(x) for x in [*range(20, 71, 5), 80, 90, 100]]
+HOUSE_PRICE = [str(x) for x in [*range(500, 8001, 500), 9000, 10000]]
+HOUSE_AREA = [str(x) for x in range(60, 151, 10)]
+FILTERS = {"chintai": {
+    "min_rent": ("cb", RENT_MAN), "max_rent": ("ct", RENT_MAN),
+    "min_area": ("mb", RENT_AREA), "max_area": ("mt", RENT_AREA),
+    "max_walk": ("et", ["1", "5", "7", "10", "15", "20"]),
+    "max_age": ("cn", ["0", "1", "3", "5", "7", "10", "15", "20", "25", "30"]),
+}}
+HOUSE_FILTERS = {
+    "min_price": ("kb", HOUSE_PRICE), "max_price": ("kt", HOUSE_PRICE + ["12000"]),
+    "min_building_area": ("hb", HOUSE_AREA), "max_building_area": ("ht", HOUSE_AREA),
+    "min_land_area": ("tb", HOUSE_AREA), "max_land_area": ("tt", HOUSE_AREA),
+    "max_walk": ("et", ["1", "3", "5", "7", "10", "15", "20"]),
+    "max_age": ("cn", ["3", "5", "7", "10", "15", "20", "25", "30"]),  # chukoikkodate only
+}
 
-def scrape(path, parser, sort):
+
+def suumo_params(kind, filters):
+    """{'max_rent': 25} -> {'ct': '25.0'}, rejecting values SUUMO would silently ignore."""
+    spec = FILTERS.get(kind, HOUSE_FILTERS)
+    params = {}
+    for name, value in filters.items():
+        if name not in spec:
+            raise ValueError(f"{kind}: unknown filter {name!r}, use one of {', '.join(spec)}")
+        param, allowed = spec[name]
+        value = f"{float(value):.1f}" if allowed is RENT_MAN else str(value)  # SUUMO wants rent as 25.0
+        if value not in allowed:
+            raise ValueError(f"{kind}: {name}={value} isn't a SUUMO option, use one of {', '.join(allowed)}")
+        params[param] = value
+    return params
+
+
+def load_config(path):
+    """-> (pages, [(type, ward, SUUMO filter params)])"""
+    with open(path, encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    targets = []
+    for kind, search in cfg["searches"].items():
+        if kind not in TYPES:
+            raise ValueError(f"unknown type {kind!r}, use one of {', '.join(TYPES)}")
+        params = suumo_params(kind, search.get("filters") or {})
+        targets += [(kind, ward, params) for ward in search["wards"]]
+    return cfg.get("pages", 3), targets
+
+
+def scrape(path, parser, params, pages):
     rows = []
-    for page in range(1, PAGES + 1):
-        r = requests.get(BASE + path, params={**sort, "page": page}, headers=HEADERS, timeout=30)
+    for page in range(1, pages + 1):
+        time.sleep(2)  # be polite
+        r = requests.get(BASE + path, params={**params, "page": page}, headers=HEADERS, timeout=30)
         print(f"{path} page {page}: HTTP {r.status_code}, {len(r.content)} bytes")
         r.raise_for_status()
-        rows += parser(r.text)
-        time.sleep(2)  # be polite
+        found = parser(r.text)
+        if not found:
+            if NO_MATCH in r.text:  # past the last page, or the filters match nothing
+                break
+            raise RuntimeError(f"{path} page {page}: no listings parsed, blocked or page layout changed")
+        rows += found
     return rows
 
 
 def main():
+    pages, targets = load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"))
     failed = []
     today = datetime.date.today()
-    for kind, ward in TARGETS:
+    for kind, ward, filters in targets:
         parser, fields, calc_fields, calc, price_key = PARSERS.get(kind, HOUSE)
-        rows = scrape(f"/{kind}/tokyo/sc_{ward}/", parser, SORT.get(kind, HOUSE_SORT))
-        if not rows:
-            failed.append(f"{kind}/{ward}")
+        try:
+            rows = scrape(f"/{kind}/tokyo/sc_{ward}/", parser, {**SORT.get(kind, HOUSE_SORT), **filters}, pages)
+        except (RuntimeError, requests.RequestException) as e:  # e.g. a mistyped ward, keep the other searches going
+            failed.append(f"{kind}/{ward}: {e}")
             continue
         for row in rows:
             row.update(calc(row, today))
@@ -252,7 +299,7 @@ def main():
         print(f"wrote {len(rows)} listings to {path}")
 
     if failed:
-        sys.exit(f"No listings parsed for {', '.join(failed)}: blocked or page layout changed")
+        sys.exit("Failed searches:\n" + "\n".join(failed))
 
 
 if __name__ == "__main__":
