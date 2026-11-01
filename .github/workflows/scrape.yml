@@ -19,6 +19,7 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python scrape.py
       - name: Commit data
+        if: ${{ !cancelled() }} # keep partial data if one target fails
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
