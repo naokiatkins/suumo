@@ -1,4 +1,4 @@
-# Nightly SUUMO searches. Each result goes to data/<type>/<ward>/YYYY-MM-DD.csv.
+# Nightly SUUMO searches. Results go to data/<type>/<ward>/<UTC timestamp>.csv, one file per search.
 #
 # wards:   the part after sc_ in SUUMO's URL, e.g. suumo.jp/chintai/tokyo/sc_setagaya/ -> setagaya
 # filters: applied by SUUMO, so all scraped pages are matches. SUUMO only accepts its own dropdown
@@ -45,3 +45,11 @@ searches:
       # max_walk: 15              # minutes to station: 1, 3, 5, 7, 10, 15, 20
       # south_facing: true        # listings the agency tagged 南向き (south-facing)
       # SUUMO has no building structure filter for houses
+
+# Searches copied from SUUMO's own search page: set the filters there, then paste the results page URL.
+# Results are split into ward folders by each listing's address (outside the 23 wards -> other/).
+# Rent and houses (新築・中古一戸建て) are supported. The sort is replaced with newest first.
+# pages is shared by every ward in the URL, so a busy ward can crowd out a quiet one: raise it if needed.
+custom:
+  - url: https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&pc=30&smk=&po1=25&po2=99&sd=1&kz=1&kz=2&shkr1=03&shkr2=03&shkr3=03&shkr4=03&sc=13109&sc=13110&sc=13112&sc=13113&sc=13114&sc=13115&ta=13&cb=0.0&ct=15.0&ts=1&et=10&mb=40&mt=9999999&cn=15&fw2=
+    pages: 15  # about 50 rooms per page; this search had 720 matches

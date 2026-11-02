@@ -3,8 +3,8 @@ import datetime
 import os
 import tempfile
 
-from scrape import (add_history, area_span, calc_rent, load_config, nearest_station, price_span,
-                    rooms_span, suumo_params, yen)
+from scrape import (add_history, area_span, calc_rent, custom_target, load_config, nearest_station,
+                    price_span, rooms_span, suumo_params, ward_of, yen)
 
 
 def rejects(kind, filters):
@@ -27,6 +27,19 @@ assert rejects("chintai", {"max_rent": 23.7})  # SUUMO would silently return not
 assert rejects("chintai", {"max_walk": 3})  # 3 minutes exists for houses, not rent
 assert rejects("ikkodate", {"min_price": 12000})  # 12000 is a max-only option
 assert rejects("chintai", {"max_price": 25})  # rent uses max_rent
+kind, path, query = custom_target("https://suumo.jp/jj/chintai/ichiran/FR301FC001/?ar=030&bs=040&po1=25&po2=99"
+                                  "&kz=1&kz=2&sc=13109&sc=13112&ta=13&ct=15.0&fw2=&page=4")
+assert (kind, path) == ("chintai", "/jj/chintai/ichiran/FR301FC001/")
+assert query == [("ar", "030"), ("bs", "040"), ("kz", "1"), ("kz", "2"), ("sc", "13109"), ("sc", "13112"),
+                 ("ta", "13"), ("ct", "15.0"), ("fw2", ""), ("po1", "09"), ("po2", "99")]  # newest first, from page 1
+assert custom_target("https://suumo.jp/jj/bukken/ichiran/JJ010FJ001/?ar=030&bs=021&sc=13112")[0] == "chukoikkodate"
+try:
+    custom_target("https://suumo.jp/jj/bukken/ichiran/JJ010FJ001/?ar=030&bs=011")  # 新築マンション: no parser
+    raise AssertionError("accepted an unsupported type")
+except ValueError:
+    pass
+assert ward_of("東京都世田谷区砧５") == "setagaya" and ward_of("東京都北区赤羽１") == "kita"
+assert ward_of("東京都武蔵野市吉祥寺本町１") == "other"
 load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"))  # the real config is valid
 
 assert yen("33.5万円") == 335000
@@ -82,6 +95,6 @@ with tempfile.TemporaryDirectory() as folder:
         f.write("id,_monthly_yen,_first_seen\n")  # a day where the filters matched nothing
     rows = [{"id": "1", **rent, **c}]
     add_history(rows, folder, today, "_monthly_yen")
-    assert rows[0]["_first_seen"] == "2026-11-03"
+    assert rows[0]["_first_seen"] is None  # missing for a night, still remembered from 2026-11-01
 
 print("ok")
