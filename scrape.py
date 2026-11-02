@@ -1,10 +1,11 @@
-"""Scrape the SUUMO searches in config.yaml into data/<type>/<ward>/YYYY-MM-DD.csv."""
+"""Scrape the SUUMO searches in config.yaml into data/<type>/<ward>/<UTC timestamp>.csv."""
 import csv
 import datetime
 import os
 import re
 import sys
 import time
+from urllib.parse import parse_qsl, urlsplit
 
 import requests
 import yaml
@@ -178,22 +179,25 @@ def calc_house(row, today):
 
 
 def add_history(rows, folder, today, price_key):
-    """Fill _first_seen from the previous CSV in folder. On the first snapshot every row stays null,
+    """Fill _first_seen from the earlier CSVs in folder. On the first snapshot every row stays null,
     so a date only appears on listings that showed up after scraping began. CSVs from before the
-    history columns existed don't count: they used a different sort order, so aren't comparable."""
-    earlier = sorted(f for f in os.listdir(folder) if f.endswith(".csv") and f < f"{today.isoformat()}.csv") \
-        if os.path.isdir(folder) else []
-    if not earlier:
-        return
-    with open(os.path.join(folder, earlier[-1]), encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        prev = {r["id"]: r for r in reader}
-    if "_first_seen" not in (reader.fieldnames or []):  # checks the header, so an empty CSV still counts
+    history columns existed don't count: they used a different sort order, so aren't comparable.
+    Every file counts, not just the latest, since several searches with different filters can
+    write to one ward folder, and a listing missing for a night shouldn't come back as new."""
+    files = sorted(f for f in os.listdir(folder) if f.endswith(".csv")) if os.path.isdir(folder) else []
+    prev, baseline = {}, False
+    for name in files:  # oldest first, so each id ends up with its latest sighting
+        with open(os.path.join(folder, name), encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            if "_first_seen" not in (reader.fieldnames or []):  # checks the header, so an empty CSV still counts
+                continue
+            baseline = True
+            prev.update((r["id"], r) for r in reader)
+    # shortcut: rereads every past CSV in the folder each run; fine for years of nightly files, move to a database if slow
+    if not baseline:
         return
     for row in rows:
         p = prev.get(row["id"])
-        # shortcut: only compares with the latest earlier file, so a listing missing for a night
-        # (or pushed past the scraped pages) comes back as new; compare against all files if that gets noisy
         first = (p.get("_first_seen") or None) if p else today.isoformat()
         old_price = int(p[price_key]) if p and p[price_key] else None
         row["_first_seen"] = first
@@ -210,6 +214,13 @@ HOUSE = (parse_house, HOUSE_FIELDS, HOUSE_CALC, calc_house, "_price_yen_min")
 # SUUMO's default "recommended" order shuffling listings in and out of those pages.
 SORT = {"chintai": {"po1": "09", "po2": "99"}}  # 新着順
 HOUSE_SORT = {"po": "1", "pj": "2"}  # 新着・更新順: updated old listings also rise, so a few false "new"
+CUSTOM_TYPES = {"040": "chintai", "020": "ikkodate", "021": "chukoikkodate"}  # bs= in a SUUMO search URL
+# Folder names for the 23 wards, matching SUUMO's sc_ names. Listings elsewhere go to other/.
+WARDS = {"千代田区": "chiyoda", "中央区": "chuo", "港区": "minato", "新宿区": "shinjuku", "文京区": "bunkyo",
+         "台東区": "taito", "墨田区": "sumida", "江東区": "koto", "品川区": "shinagawa", "目黒区": "meguro",
+         "大田区": "ota", "世田谷区": "setagaya", "渋谷区": "shibuya", "中野区": "nakano", "杉並区": "suginami",
+         "豊島区": "toshima", "北区": "kita", "荒川区": "arakawa", "板橋区": "itabashi", "練馬区": "nerima",
+         "足立区": "adachi", "葛飾区": "katsushika", "江戸川区": "edogawa"}
 
 # config.yaml filter name -> (SUUMO query param, values SUUMO's dropdowns accept)
 RENT_MAN = [f"{x / 2:.1f}" for x in range(6, 40)] + [f"{x:.1f}" for x in [*range(20, 31), 35, 40, 50, 100]]
@@ -255,24 +266,44 @@ def suumo_params(kind, filters):
     return params
 
 
+def ward_of(address):
+    """'東京都世田谷区砧５' -> 'setagaya'"""
+    m = re.match(r"東京都(.+?区)", address)
+    return WARDS.get(m[1], "other") if m else "other"
+
+
+def custom_target(url):
+    """A SUUMO search URL -> (type, path, query pairs), with the sort forced to newest first."""
+    parts = urlsplit(url)
+    query = parse_qsl(parts.query, keep_blank_values=True)  # pairs, since sc= and kz= repeat
+    kind = CUSTOM_TYPES.get(dict(query).get("bs"))
+    if parts.netloc != "suumo.jp" or not kind:
+        raise ValueError(f"not a SUUMO rent or house search URL: {url}")
+    sort = SORT.get(kind, HOUSE_SORT)
+    return kind, parts.path, [(k, v) for k, v in query if k not in sort and k != "page"] + list(sort.items())
+
+
 def load_config(path):
-    """-> (pages, [(type, ward, SUUMO filter params)])"""
+    """-> [(type, path, query pairs, pages, ward or None)]; None means split by each listing's address."""
     with open(path, encoding="utf-8") as f:
         cfg = yaml.safe_load(f)
+    pages = cfg.get("pages", 3)
     targets = []
-    for kind, search in cfg["searches"].items():
+    for kind, search in (cfg.get("searches") or {}).items():
         if kind not in TYPES:
             raise ValueError(f"unknown type {kind!r}, use one of {', '.join(TYPES)}")
-        params = suumo_params(kind, search.get("filters") or {})
-        targets += [(kind, ward, params) for ward in search["wards"]]
-    return cfg.get("pages", 3), targets
+        query = list({**SORT.get(kind, HOUSE_SORT), **suumo_params(kind, search.get("filters") or {})}.items())
+        targets += [(kind, f"/{kind}/tokyo/sc_{ward}/", query, pages, ward) for ward in search["wards"]]
+    for search in cfg.get("custom") or []:
+        targets.append((*custom_target(search["url"]), search.get("pages", pages), None))
+    return targets
 
 
 def scrape(path, parser, params, pages):
     rows = []
     for page in range(1, pages + 1):
         time.sleep(2)  # be polite
-        r = requests.get(BASE + path, params={**params, "page": page}, headers=HEADERS, timeout=30)
+        r = requests.get(BASE + path, params=[*params, ("page", page)], headers=HEADERS, timeout=30)
         print(f"{path} page {page}: HTTP {r.status_code}, {len(r.content)} bytes")
         r.raise_for_status()
         found = parser(r.text)
@@ -285,27 +316,32 @@ def scrape(path, parser, params, pages):
 
 
 def main():
-    pages, targets = load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"))
+    targets = load_config(os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml"))
     failed = []
-    today = datetime.date.today()
-    for kind, ward, filters in targets:
+    today = datetime.datetime.now(datetime.timezone.utc).date()
+    for kind, path, query, pages, ward in targets:
         parser, fields, calc_fields, calc, price_key = PARSERS.get(kind, HOUSE)
         try:
-            rows = scrape(f"/{kind}/tokyo/sc_{ward}/", parser, {**SORT.get(kind, HOUSE_SORT), **filters}, pages)
+            rows = scrape(path, parser, query, pages)
         except (RuntimeError, requests.RequestException) as e:  # e.g. a mistyped ward, keep the other searches going
-            failed.append(f"{kind}/{ward}: {e}")
+            failed.append(f"{path}: {e}")
             continue
+        by_ward = {ward: []} if ward else {}  # a ward search with no matches still writes an empty CSV
         for row in rows:
             row.update(calc(row, today))
-        folder = os.path.join("data", kind, ward)
-        add_history(rows, folder, today, price_key)
-        os.makedirs(folder, exist_ok=True)
-        path = os.path.join(folder, f"{today.isoformat()}.csv")
-        with open(path, "w", newline="", encoding="utf-8") as f:
-            w = csv.DictWriter(f, fieldnames=fields + calc_fields + HISTORY, restval="")
-            w.writeheader()
-            w.writerows(rows)
-        print(f"wrote {len(rows)} listings to {path}")
+            by_ward.setdefault(ward or ward_of(row["address"]), []).append(row)
+        # Timestamped, so several searches covering one ward on one day each keep their own file
+        stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H%M%SZ")
+        for name, ward_rows in by_ward.items():
+            folder = os.path.join("data", kind, name)
+            add_history(ward_rows, folder, today, price_key)
+            os.makedirs(folder, exist_ok=True)
+            out = os.path.join(folder, f"{stamp}.csv")
+            with open(out, "w", newline="", encoding="utf-8") as f:
+                w = csv.DictWriter(f, fieldnames=fields + calc_fields + HISTORY, restval="")
+                w.writeheader()
+                w.writerows(ward_rows)
+            print(f"wrote {len(ward_rows)} listings to {out}")
 
     if failed:
         sys.exit("Failed searches:\n" + "\n".join(failed))
